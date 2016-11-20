@@ -1,0 +1,55 @@
+#!/bin/sh
+PHOTO_DIR="/photos"
+AUTH_DIR="/auth"
+username="$1"
+
+if ! mountpoint -q $PHOTO_DIR; then
+    echo "Photo target directory missing, please pass it as a Docker volume, e.g.:"
+    echo "  ... -v /nas/pictures/icloud:$PHOTO_DIR"
+    exit 1
+fi
+
+if ! mountpoint -q $AUTH_DIR; then
+    echo "Credential directory missing, please pass it as a Docker volume, e.g.:"
+    echo "  ... -v /home/tux/icloud-secrets-ipd:$AUTH_DIR"
+    exit 1
+fi
+
+if [ -z $username ]; then
+    echo "Please pass an Apple ID to Docker, e.g.:"
+    echo "  docker run -ti -v ~/pics/icloud:$PHOTO_DIR -v ~/icloud-secrets:$AUTH_DIR maxhq/ipd myapple@id"
+    exit 1
+fi
+
+# Restore stored password if existing
+if [ -f $AUTH_DIR/keyring_pass.cfg ]; then
+    mkdir -p /root/.local/share/python_keyring/
+    cp $AUTH_DIR/keyring_pass.cfg /root/.local/share/python_keyring/
+fi
+
+# Restore 2-factor-auth token (cookie) if existing
+if [ -d $AUTH_DIR/pyicloud ]; then
+    cp -R $AUTH_DIR/pyicloud /tmp/
+fi
+
+# Password input
+if [ ! -e /root/.local/share/python_keyring/keyring_pass.cfg ]; then
+    echo "iCloud password not found in Python keychain, input required"
+    if [ -z $TERM ]; then
+        echo "ERROR: Please run this container once in interactive mode like:"
+        echo "docker run -ti -v ~/pics/icloud:$PHOTO_DIR -v ~/icloud-secrets:$AUTH_DIR maxhq/icloud-photos-downloader myappleid"
+        exit 1
+    fi
+    /usr/local/bin/icloud --username "$username"
+    # Backup stored password
+    mountpoint -q $AUTH_DIR && cp /root/.local/share/python_keyring/keyring_pass.cfg $AUTH_DIR/
+fi
+
+echo "Synchronizing iCloud photos"
+/usr/bin/env python /ipd/download_photos.py --username "$username" --download-videos $PHOTO_DIR
+dir_user=$(stat -c %u $PHOTO_DIR)
+dir_group=$(stat -c %g $PHOTO_DIR)
+chown -R $dir_user:$dir_group $PHOTO_DIR/*
+
+# Backup stored 2-factor-auth token
+mountpoint -q $AUTH_DIR && cp -R /tmp/pyicloud $AUTH_DIR/
